@@ -1,13 +1,13 @@
 import os
 import telebot
-import json
-from flask import Flask, request, redirect
+from flask import Flask, request, render_template, jsonify
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 # --- 1. КОНФИГУРАЦИЯ И ПРОВЕРКА ПЕРЕМЕННЫХ ---
 
-# Получение переменных окружения
+# Получение переменных окружения (должны быть заданы на Render!)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
@@ -16,8 +16,7 @@ WEBHOOK_BASE_URL = os.environ.get('WEBHOOK_BASE_URL')
 # Обязательная проверка наличия всех ключей
 if not all([TELEGRAM_TOKEN, SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, WEBHOOK_BASE_URL]):
     print("FATAL ERROR: Один или несколько ключей окружения отсутствуют!")
-    # Вызываем исключение, чтобы Render знал, что сервис не может быть запущен
-    raise EnvironmentError("Необходимо установить все переменные окружения: TELEGRAM_TOKEN, SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, WEBHOOK_BASE_URL.")
+    raise EnvironmentError("Необходимо установить все переменные окружения на Render.")
 
 WEBHOOK_PATH = f'/{TELEGRAM_TOKEN}' 
 SPOTIPY_REDIRECT_URI = f'{WEBHOOK_BASE_URL}/callback'
@@ -49,10 +48,9 @@ def get_spotify_client(user_id):
     
     token_info = USER_TOKENS[user_id]
     
-    # ... (логика обновления токена остается прежней)
+    # Проверка и обновление токена
     if SpotifyOAuth.is_token_expired(token_info):
         sp_oauth = get_spotify_oauth(user_id)
-        # ВАЖНО: убедитесь, что в spotipy 2.25.2 используется 'refresh_token'
         token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
         USER_TOKENS[user_id] = token_info
         
@@ -63,41 +61,44 @@ def get_spotify_client(user_id):
 @bot.message_handler(commands=['start', 'auth'])
 def send_auth_link(message):
     user_id = str(message.chat.id)
-    print(f"Обработка команды /start для пользователя {user_id}")
     
-    # ПРОВЕРКА: Если ключи Spotify не установлены, здесь будет ошибка!
     try:
         sp_oauth = get_spotify_oauth(user_id)
         auth_url = sp_oauth.get_authorize_url()
     except Exception as e:
         print(f"Ошибка генерации ссылки Spotify: {e}")
-        bot.send_message(user_id, "❌ Произошла ошибка конфигурации. Пожалуйста, проверьте ключи Spotify.")
+        bot.send_message(user_id, "❌ Произошла ошибка конфигурации. Проверьте ключи Spotify.", parse_mode="Markdown")
         return
 
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(telebot.types.InlineKeyboardButton("🔑 Авторизоваться в Spotify", url=auth_url))
+    markup = InlineKeyboardMarkup()
+    
+    # 1. Кнопка для OAuth (Авторизация Spotify)
+    oauth_button = InlineKeyboardButton("🔑 Авторизоваться в Spotify (ШАГ 1)", url=auth_url)
+    
+    # 2. Кнопка для Mini App (Web App Button)
+    webapp_url = WebAppInfo(url=WEBHOOK_BASE_URL) 
+    webapp_button = InlineKeyboardButton("✨ Запустить Mini App (ШАГ 2)", web_app=webapp_url)
+
+    markup.add(oauth_button) 
+    markup.add(webapp_button) 
 
     bot.send_message(user_id, 
-                     "Для управления Spotify необходима авторизация.\nНажмите кнопку ниже:", 
+                     "Для работы с Spotify сначала авторизуйтесь (Шаг 1), затем запустите Mini App (Шаг 2).", 
                      reply_markup=markup,
                      parse_mode="Markdown")
 
-# ... (Остальные обработчики, как /play, остаются прежними)
 @bot.message_handler(commands=['play'])
 def control_playback(message):
     user_id = str(message.chat.id)
+    # Эта функция только проверяет авторизацию
     sp_client = get_spotify_client(user_id)
     
     if not sp_client:
         return bot.reply_to(message, "⚠️ Сначала авторизуйтесь, используя /auth")
+    
+    bot.reply_to(message, "Используйте Mini App (кнопка '✨') для управления.")
 
-    try:
-        sp_client.start_playback()
-        bot.reply_to(message, "▶️ Запрос на возобновление воспроизведения отправлен!")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка управления: Убедитесь, что Spotify запущен на одном из ваших устройств. Ошибка: {e}")
-
-# --- 4. МАРШРУТЫ FLASK (ВЕБХУКИ) ---
+# --- 4. МАРШРУТЫ FLASK (ВЕБХУКИ И API ДЛЯ MINI APP) ---
 
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def telegram_webhook():
@@ -115,28 +116,70 @@ def spotify_callback():
     code = request.args.get('code')
     user_id = request.args.get('state') 
     
-    # ... (логика обработки callback остается прежней)
     if not code:
-        bot.send_message(user_id, "❌ Авторизация Spotify отменена.")
+        bot.send_message(user_id, "❌ Авторизация Spotify отменена.", parse_mode="Markdown")
         return "Авторизация отменена."
 
-    sp_oauth = get_spotify_oauth(user_id)
-    token_info = sp_oauth.get_access_token(code)
-    
-    USER_TOKENS[user_id] = token_info
+    try:
+        sp_oauth = get_spotify_oauth(user_id)
+        token_info = sp_oauth.get_access_token(code)
+        
+        USER_TOKENS[user_id] = token_info
 
-    bot.send_message(user_id, "✅ **Авторизация Spotify прошла успешно!**\nТеперь вы можете использовать команды /play и другие.", parse_mode="Markdown")
-    return "Авторизация завершена. Вернитесь в Telegram."
+        bot.send_message(user_id, "✅ **Авторизация Spotify прошла успешно!**\nТеперь вы можете использовать Mini App.", parse_mode="Markdown")
+        return "Авторизация завершена. Вернитесь в Telegram."
+    except Exception as e:
+        print(f"Ошибка получения токена Spotify: {e}")
+        return "Ошибка авторизации. Пожалуйста, попробуйте снова."
 
 @app.route("/")
 def index():
-    """Простой маршрут для проверки статуса хостинга."""
-    return "Spotify TG Bot is running."
+    """Корневой маршрут, который отдает HTML-страницу Mini App."""
+    return render_template('index.html')
 
-# --- 5. ЗАПУСК И УСТАНОВКА ВЕБХУКА ---
+# --- API для управления из Mini App ---
+@app.route("/api/control/<action>", methods=['POST'])
+def api_control(action):
+    """Маршрут для приема команд от JavaScript из Mini App."""
+    # 1. Извлечение user_id из данных WebApp
+    # В реальном приложении это требует более сложной аутентификации,
+    # но для простоты берем его из тела запроса.
+    data = request.get_json()
+    user_id = data.get('user_id')
 
-# В этом коде мы полагаемся на gunicorn, который будет запускать app:app
-# Функция set_telegram_webhook не запускается здесь, она должна быть вызвана отдельно.
+    if not user_id:
+        return jsonify({"success": False, "message": "User ID is missing"}), 400
+
+    sp_client = get_spotify_client(user_id)
+    if not sp_client:
+        return jsonify({"success": False, "message": "User not authorized"}), 401
+
+    try:
+        if action == 'playpause':
+            playback = sp_client.current_playback()
+            if playback and playback.get('is_playing'):
+                sp_client.pause_playback()
+                msg = "Пауза"
+            else:
+                sp_client.start_playback()
+                msg = "Воспроизведение"
+        elif action == 'next':
+            sp_client.next_track()
+            msg = "Следующий трек"
+        elif action == 'prev':
+            sp_client.previous_track()
+            msg = "Предыдущий трек"
+        else:
+            return jsonify({"success": False, "message": "Invalid action"}), 400
+
+        return jsonify({"success": True, "message": msg}), 200
+
+    except Exception as e:
+        print(f"Spotify Control Error: {e}")
+        return jsonify({"success": False, "message": "Spotify API error. Check device."}), 500
+
+# --- 5. ЗАПУСК (Через Gunicorn) ---
+
 if __name__ == '__main__':
-    print("Этот код должен запускаться через 'gunicorn app:app' на Render.")
+    print("Приложение готово к запуску через Gunicorn на Render.")
     pass
