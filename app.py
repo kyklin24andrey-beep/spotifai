@@ -4,6 +4,7 @@ from flask import Flask, request, render_template, jsonify
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+import sys
 
 # --- 1. КОНФИГУРАЦИЯ И ПРОВЕРКА ПЕРЕМЕННЫХ ---
 
@@ -12,9 +13,13 @@ SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 WEBHOOK_BASE_URL = os.environ.get('WEBHOOK_BASE_URL') 
 
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Мягкая проверка переменных окружения
 if not all([TELEGRAM_TOKEN, SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, WEBHOOK_BASE_URL]):
     print("FATAL ERROR: Один или несколько ключей окружения отсутствуют!")
-    raise EnvironmentError("Необходимо установить все переменные окружения на Render.")
+    # В этой ситуации Render должен сам сообщить об ошибке в логах, 
+    # но мы оставим sys.exit(1), чтобы убедиться, что приложение не запустится с неверными ключами.
+    # Если вы увидите эту строку в логах Render, значит, вы не установили все 4 ключа.
+    sys.exit(1)
 
 WEBHOOK_PATH = f'/{TELEGRAM_TOKEN}' 
 SPOTIPY_REDIRECT_URI = f'{WEBHOOK_BASE_URL}/callback'
@@ -67,7 +72,7 @@ def send_auth_link(message):
         auth_url = sp_oauth.get_authorize_url()
     except Exception as e:
         print(f"Ошибка генерации ссылки Spotify: {e}")
-        bot.send_message(user_id, "❌ Произошла ошибка конфигурации. Проверьте ключи Spotify.", parse_mode="Markdown")
+        bot.send_message(user_id, "❌ Произошла ошибка конфигурации Spotify. Проверьте Client ID/Secret.", parse_mode="Markdown")
         return
 
     markup = InlineKeyboardMarkup()
@@ -138,7 +143,7 @@ def api_status():
         playback = sp_client.current_playback()
         
         if not playback or not playback.get('item'):
-            return jsonify({"success": True, "is_playing": False, "message": "Нет активного устройства или трека."}), 200
+            return jsonify({"success": True, "is_playing": False, "track_name": None, "message": "Нет активного устройства или трека."}), 200
 
         track = playback['item']
         
@@ -209,7 +214,7 @@ def api_like_toggle():
     data = request.get_json()
     user_id = data.get('user_id')
     track_id = data.get('track_id')
-    is_liked = data.get('is_liked') # Текущее состояние
+    is_liked = data.get('is_liked')
 
     sp_client = get_spotify_client(user_id)
     if not sp_client:
@@ -219,11 +224,9 @@ def api_like_toggle():
 
     try:
         if is_liked:
-            # Трек уже понравился -> убрать лайк
             sp_client.current_user_saved_tracks_delete([track_id])
             msg = "Лайк убран."
         else:
-            # Трек не понравился -> поставить лайк
             sp_client.current_user_saved_tracks_add([track_id])
             msg = "Трек добавлен в 'Мне нравится'."
 
@@ -269,7 +272,7 @@ def api_search_play():
     data = request.get_json()
     user_id = data.get('user_id')
     query = data.get('query')
-    is_uri = data.get('is_uri', False) # Флаг для прямого запуска по URI
+    is_uri = data.get('is_uri', False) 
 
     if not user_id or not query:
         return jsonify({"success": False, "message": "Missing user ID or query"}), 400
