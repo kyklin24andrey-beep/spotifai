@@ -228,22 +228,40 @@
             return `${minutes}:${seconds.toString().padStart(2, '0')}`;
         }
         
-        // 1. Инициализация и получение User ID
+        // 1. Инициализация и получение User ID / Проверка авторизации
         if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
             user_id = tg.initDataUnsafe.user.id.toString();
             document.getElementById('tg_user_id').textContent = user_id;
+            checkTokenAndRedirect(); // Проверяем, есть ли токен при входе на страницу плеера
         } else {
-             document.getElementById('tg_user_id').textContent = 'ID не найден.';
-             // Вместо alert(), используем pop-up Telegram, чтобы не блокировать UI
-             tg.showAlert('Ошибка: ID пользователя не найден. Авторизуйтесь через Telegram.');
+             tg.showAlert('Ошибка: ID пользователя Telegram не найден. Попробуйте перезапустить бота.');
+        }
+
+        // --- API для проверки токена ---
+        function checkTokenAndRedirect() {
+             fetch('/api/check_token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user_id })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.is_authorized) {
+                    // Если не авторизован, перенаправляем на страницу авторизации (корневой маршрут)
+                    window.location.href = '/'; 
+                } else {
+                    // Если авторизован, запускаем загрузку данных
+                    loadLists();
+                    updatePlayerStatus();
+                    setInterval(updatePlayerStatus, 5000); 
+                }
+            })
+            .catch(() => tg.showAlert('Сетевая ошибка при проверке токена.'));
         }
 
         // --- 2. УПРАВЛЕНИЕ (Play/Next/Prev) ---
         function sendControlCommand(action) {
-            if (!user_id) {
-                tg.showAlert('Пользователь не авторизован.');
-                return;
-            }
+            if (!user_id) return;
 
             const actionRoute = (action === 'playpause') ? 'playpause' : (action === 'next' ? 'next' : 'prev');
 
@@ -464,11 +482,6 @@
         document.getElementById('nextBtn').onclick = () => sendControlCommand('next');
         document.getElementById('prevBtn').onclick = () => sendControlCommand('prev');
         document.getElementById('searchBtn').onclick = () => searchAndPlay(null, false);
-
-        // Запускаем загрузку данных и обновление статуса
-        loadLists();
-        updatePlayerStatus();
-        setInterval(updatePlayerStatus, 5000); 
 
         tg.MainButton.setText("Закрыть Mini App").onClick(() => tg.close()).show();
     </script>
