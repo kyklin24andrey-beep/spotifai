@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Spotify Web App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            text-align: center; 
+            background-color: #191414; 
+            color: white; 
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        .controls button {
+            background-color: #1DB954; 
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            margin: 10px;
+            font-size: 18px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .controls button:hover {
+            background-color: #1ed760;
+        }
+        #status {
+            margin-bottom: 20px;
+            font-size: 1.1em;
+            color: #b3b3b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Spotify Control</h1>
+        <p id="status">Загрузка...</p>
+        <div class="controls">
+            <button id="prevBtn">⏮️</button>
+            <button id="playPauseBtn">▶️ / ⏸️</button>
+            <button id="nextBtn">⏭️</button>
+        </div>
+        <p>Управление для пользователя: <span id="tg_user_id">...</span></p>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        
+        let user_id = null;
+        
+        // --- 1. Извлечение User ID из данных Web App ---
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            user_id = tg.initDataUnsafe.user.id.toString();
+            document.getElementById('tg_user_id').textContent = user_id;
+        } else {
+             document.getElementById('tg_user_id').textContent = 'ID не найден. Авторизуйтесь.';
+             document.getElementById('status').textContent = 'Ошибка: ID пользователя не найден.';
+        }
+
+        // --- 2. Функция для отправки команд на бэкенд Flask ---
+        function sendControlCommand(action) {
+            if (!user_id) {
+                alert('Сначала нужно авторизоваться!');
+                return;
+            }
+
+            document.getElementById('status').textContent = `Отправка команды: ${action}`;
+
+            fetch(`/api/control/${action}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_id: user_id })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('status').textContent = `✅ Успешно: ${data.message}`;
+                } else {
+                    document.getElementById('status').textContent = `❌ Ошибка: ${data.message}`;
+                }
+            })
+            .catch(error => {
+                console.error('Fetch error:', error);
+                document.getElementById('status').textContent = 'Сетевая ошибка или ошибка сервера.';
+            });
+        }
+
+        // --- 3. Назначение обработчиков на кнопки ---
+        document.getElementById('playPauseBtn').onclick = () => sendControlCommand('playpause');
+        document.getElementById('nextBtn').onclick = () => sendControlCommand('next');
+        document.getElementById('prevBtn').onclick = () => sendControlCommand('prev');
+        
+        // Установка кнопки закрытия в Mini App
+        tg.MainButton.setText("Закрыть Mini App").onClick(() => tg.close()).show();
+        document.getElementById('status').textContent = 'Готов к управлению Spotify.';
+    </script>
+</body>
+</html>
