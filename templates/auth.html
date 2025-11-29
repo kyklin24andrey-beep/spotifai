@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Spotify Auth</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { 
+            font-family: 'Circular Std', Arial, sans-serif;
+            text-align: center; 
+            background-color: #121212; 
+            color: white; 
+            padding: 40px 20px;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #1DB954; 
+        }
+        p {
+            margin-bottom: 30px;
+            color: #b3b3b3;
+        }
+        #authBtn {
+            background-color: #1DB954;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            display: none; /* Скрыто до получения user_id */
+        }
+        #authBtn:hover {
+            background-color: #10a845;
+        }
+    </style>
+</head>
+<body>
+    <h1>Добро пожаловать в Spotify Mini App</h1>
+    <p id="status-text">Загрузка данных пользователя Telegram...</p>
+    <button id="authBtn">Войти через Spotify</button>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        
+        let user_id = null;
+        const statusText = document.getElementById('status-text');
+        const authBtn = document.getElementById('authBtn');
+
+        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+            user_id = tg.initDataUnsafe.user.id.toString();
+            statusText.textContent = `Ваш ID: ${user_id}. Проверяем авторизацию...`;
+            authBtn.style.display = 'block';
+            
+            checkTokenAndRedirect();
+
+        } else {
+             statusText.textContent = 'Ошибка: ID пользователя Telegram не найден. Попробуйте перезапустить бота.';
+        }
+        
+        // --- API для получения ссылки авторизации ---
+        function getAuthUrl() {
+            authBtn.disabled = true;
+            authBtn.textContent = "Перенаправление...";
+            fetch('/api/auth_url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user_id })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.auth_url) {
+                    // Перенаправление на Spotify (в браузере Mini App)
+                    window.location.href = data.auth_url;
+                } else {
+                    tg.showAlert(`Ошибка: ${data.message}`);
+                    authBtn.disabled = false;
+                    authBtn.textContent = "Войти через Spotify";
+                }
+            })
+            .catch(() => {
+                tg.showAlert('Сетевая ошибка.');
+                authBtn.disabled = false;
+                authBtn.textContent = "Войти через Spotify";
+            });
+        }
+
+        // --- API для проверки токена ---
+        function checkTokenAndRedirect() {
+             fetch('/api/check_token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user_id })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.is_authorized) {
+                    // Если авторизован, перенаправляем на главный экран плеера
+                    window.location.href = '/player'; 
+                } else {
+                    statusText.textContent = `Ваш ID: ${user_id}. Требуется авторизация Spotify.`;
+                }
+            })
+            .catch(() => {
+                statusText.textContent = `Сетевая ошибка. Попробуйте снова.`;
+            });
+        }
+
+        authBtn.onclick = getAuthUrl;
+
+        tg.MainButton.setText("Закрыть Mini App").onClick(() => tg.close()).show();
+    </script>
+</body>
+</html>
