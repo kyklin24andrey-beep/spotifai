@@ -141,7 +141,7 @@
             border-radius: 10px;
             margin-top: 20px;
             display: flex;
-            flex-wrap: wrap; /* Для мобильных устройств */
+            flex-wrap: wrap; 
         }
         #search-query {
             flex-grow: 1;
@@ -228,17 +228,22 @@
             return `${minutes}:${seconds.toString().padStart(2, '0')}`;
         }
         
+        // 1. Инициализация и получение User ID
         if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
             user_id = tg.initDataUnsafe.user.id.toString();
             document.getElementById('tg_user_id').textContent = user_id;
         } else {
              document.getElementById('tg_user_id').textContent = 'ID не найден.';
-             alert('Ошибка: ID пользователя не найден. Авторизуйтесь через Telegram.');
+             // Вместо alert(), используем pop-up Telegram, чтобы не блокировать UI
+             tg.showAlert('Ошибка: ID пользователя не найден. Авторизуйтесь через Telegram.');
         }
 
-        // --- 1. УПРАВЛЕНИЕ (Play/Next/Prev) ---
+        // --- 2. УПРАВЛЕНИЕ (Play/Next/Prev) ---
         function sendControlCommand(action) {
-            if (!user_id) return;
+            if (!user_id) {
+                tg.showAlert('Пользователь не авторизован.');
+                return;
+            }
 
             const actionRoute = (action === 'playpause') ? 'playpause' : (action === 'next' ? 'next' : 'prev');
 
@@ -252,15 +257,16 @@
                 if (data.success) {
                     setTimeout(updatePlayerStatus, 500); 
                 } else {
-                    alert(`Ошибка управления: ${data.message}`);
+                    tg.showAlert(`Ошибка управления: ${data.message}`);
                 }
-            });
+            })
+            .catch(() => tg.showAlert('Сетевая ошибка при отправке команды.'));
         }
         
-        // --- 2. УПРАВЛЕНИЕ ЛАЙКОМ (СЕРДЕЧКО) ---
+        // --- 3. УПРАВЛЕНИЕ ЛАЙКОМ (СЕРДЕЧКО) ---
         document.getElementById('like-btn').onclick = function() {
             if (!user_id || !currentTrackId) {
-                alert('Нет активного трека для лайка.');
+                tg.showAlert('Нет активного трека для лайка.');
                 return;
             }
             
@@ -274,18 +280,18 @@
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // Переключаем визуальное состояние
                     this.classList.toggle('liked');
                     this.textContent = isLiked ? '🤍' : '💚';
                     tg.showPopup({message: data.message});
-                    loadLists(); // Обновляем список "Мне нравится"
+                    loadLists(); 
                 } else {
-                    alert(`Ошибка лайка: ${data.message}`);
+                    tg.showAlert(`Ошибка лайка: ${data.message}`);
                 }
-            });
+            })
+            .catch(() => tg.showAlert('Сетевая ошибка при лайке.'));
         };
 
-        // --- 3. ОБНОВЛЕНИЕ СТАТУСА ПЛЕЕРА ---
+        // --- 4. ОБНОВЛЕНИЕ СТАТУСА ПЛЕЕРА ---
         function updatePlayerStatus() {
             if (!user_id) return;
 
@@ -299,15 +305,24 @@
                 clearInterval(currentProgressInterval);
                 document.getElementById('like-btn').style.display = 'none';
 
-                if (!data.success || !data.track_name) {
-                    document.getElementById('track-name').textContent = 'Нет активного устройства или трека.';
-                    document.getElementById('artist-name').textContent = data.message || 'Запустите Spotify.';
+                if (!data.success) {
+                    document.getElementById('track-name').textContent = 'Ошибка загрузки.';
+                    document.getElementById('artist-name').textContent = data.message;
                     document.getElementById('album-art').src = '';
                     document.getElementById('playPauseBtn').textContent = '▶️';
                     currentTrackId = null;
                     return;
                 }
 
+                if (!data.track_name) {
+                    document.getElementById('track-name').textContent = 'Нет активного устройства или трека.';
+                    document.getElementById('artist-name').textContent = data.message;
+                    document.getElementById('album-art').src = '';
+                    document.getElementById('playPauseBtn').textContent = '▶️';
+                    currentTrackId = null;
+                    return;
+                }
+                
                 // Обновление информации о треке
                 currentTrackId = data.track_id;
                 document.getElementById('track-name').textContent = data.track_name;
@@ -351,10 +366,14 @@
                         }
                     }, 1000);
                 }
+            })
+            .catch(() => {
+                 document.getElementById('track-name').textContent = 'Сетевая ошибка.';
+                 clearInterval(currentProgressInterval);
             });
         }
         
-        // --- 4. ФУНКЦИИ ЗАГРУЗКИ ПЛЕЙЛИСТОВ И КОЛЛЕКЦИИ ---
+        // --- 5. ФУНКЦИИ ЗАГРУЗКИ ПЛЕЙЛИСТОВ И КОЛЛЕКЦИИ ---
         function loadLists() {
             if (!user_id) return;
             
@@ -366,8 +385,9 @@
             .then(response => response.json())
             .then(data => {
                 if (!data.success) {
-                    document.getElementById('playlists-list').textContent = `Ошибка: ${data.message}`;
-                    document.getElementById('liked-tracks-list').textContent = `Ошибка: ${data.message}`;
+                    const errorMsg = `Ошибка загрузки списков: ${data.message}`;
+                    document.getElementById('playlists-list').textContent = errorMsg;
+                    document.getElementById('liked-tracks-list').textContent = errorMsg;
                     return;
                 }
                 
@@ -377,7 +397,7 @@
                 data.playlists.forEach(pl => {
                     const button = document.createElement('button');
                     button.textContent = pl.name;
-                    button.onclick = () => searchAndPlay(pl.uri, true); // Запуск плейлиста
+                    button.onclick = () => searchAndPlay(pl.uri, true);
                     plList.appendChild(button);
                 });
 
@@ -391,19 +411,27 @@
                     span.textContent = `${track.name} - ${track.artist}`;
                     const button = document.createElement('button');
                     button.textContent = '▶️';
-                    button.onclick = () => searchAndPlay(track.uri, true); // Запуск трека
+                    button.onclick = () => searchAndPlay(track.uri, true); 
                     
                     div.appendChild(span);
                     div.appendChild(button);
                     ltList.appendChild(div);
                 });
 
+            })
+            .catch(() => {
+                const errorMsg = `Сетевая ошибка при загрузке списков.`;
+                document.getElementById('playlists-list').textContent = errorMsg;
+                document.getElementById('liked-tracks-list').textContent = errorMsg;
             });
         }
         
-        // --- 5. ПОИСК И ЗАПУСК (Обновлено для плейлистов/URI) ---
+        // --- 6. ПОИСК И ЗАПУСК ---
         function searchAndPlay(queryOrUri, isUri = false) {
-            if (!user_id) return;
+            if (!user_id) {
+                tg.showAlert('Пользователь не авторизован.');
+                return;
+            }
             let query = queryOrUri;
             
             if (!isUri) {
@@ -425,10 +453,13 @@
                     document.getElementById('search-query').value = '';
                     setTimeout(updatePlayerStatus, 1000);
                 }
+            })
+            .catch(() => {
+                document.getElementById('search-result').textContent = 'Сетевая ошибка при поиске и запуске.';
             });
         }
 
-        // --- 6. НАЗНАЧЕНИЕ ОБРАБОТЧИКОВ И ЗАПУСК ОБНОВЛЕНИЯ ---
+        // --- 7. НАЗНАЧЕНИЕ ОБРАБОТЧИКОВ И ЗАПУСК ОБНОВЛЕНИЯ ---
         document.getElementById('playPauseBtn').onclick = () => sendControlCommand('playpause');
         document.getElementById('nextBtn').onclick = () => sendControlCommand('next');
         document.getElementById('prevBtn').onclick = () => sendControlCommand('prev');
