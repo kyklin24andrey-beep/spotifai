@@ -1,52 +1,154 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Spotify Web App</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Mini App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
+        /* Стили, имитирующие Spotify */
         body { 
-            font-family: Arial, sans-serif; 
+            font-family: 'Circular Std', Arial, sans-serif;
             text-align: center; 
             background-color: #191414; 
             color: white; 
-            padding: 20px;
+            padding: 0;
+            margin: 0;
+            min-height: 100vh;
         }
         .container {
-            max-width: 400px;
-            margin: 0 auto;
+            padding: 20px;
+        }
+        /* Секция текущего трека */
+        #current-track {
+            margin-bottom: 30px;
+            background-color: #282828;
+            padding: 20px 10px;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+        }
+        #album-art {
+            width: 150px;
+            height: 150px;
+            border-radius: 8px;
+            object-fit: cover;
+            margin-bottom: 15px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
+        }
+        #track-info h2 {
+            font-size: 1.4em;
+            margin: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #track-info p {
+            font-size: 1.0em;
+            color: #b3b3b3;
+            margin: 5px 0 0;
+        }
+        /* Элементы управления */
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 30px;
         }
         .controls button {
-            background-color: #1DB954; 
-            color: white;
+            background: none;
             border: none;
-            padding: 15px 30px;
-            margin: 10px;
-            font-size: 18px;
-            border-radius: 50px;
+            color: white;
+            padding: 15px;
+            font-size: 24px;
             cursor: pointer;
-            transition: background-color 0.3s;
         }
-        .controls button:hover {
-            background-color: #1ed760;
+        .controls #playPauseBtn {
+            font-size: 40px;
+            margin: 0 20px;
         }
-        #status {
+        /* Прогресс-бар */
+        .progress-bar-container {
+            display: flex;
+            align-items: center;
             margin-bottom: 20px;
-            font-size: 1.1em;
+            color: #b3b3b3;
+            font-size: 0.8em;
+        }
+        #progress-bar {
+            flex-grow: 1;
+            height: 4px;
+            background: #535353;
+            border-radius: 2px;
+            margin: 0 10px;
+            position: relative;
+        }
+        #progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: #1DB954;
+            border-radius: 2px;
+        }
+        /* Поиск */
+        #search-section {
+            background-color: #282828;
+            padding: 15px;
+            border-radius: 10px;
+        }
+        #search-section input {
+            width: 70%;
+            padding: 10px;
+            border: none;
+            border-radius: 5px 0 0 5px;
+            background-color: #404040;
+            color: white;
+        }
+        #search-section button {
+            width: 30%;
+            padding: 10px;
+            border: none;
+            border-radius: 0 5px 5px 0;
+            background-color: #1DB954;
+            color: white;
+            font-weight: bold;
+        }
+        #search-result {
+            margin-top: 10px;
             color: #b3b3b3;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Spotify Control</h1>
-        <p id="status">Загрузка...</p>
+        
+        <div id="current-track">
+            <img id="album-art" src="" alt="Album Art">
+            <div id="track-info">
+                <h2 id="track-name">Загрузка...</h2>
+                <p id="artist-name">Пожалуйста, дождитесь информации.</p>
+            </div>
+        </div>
+
+        <div class="progress-bar-container">
+            <span id="progress-time">0:00</span>
+            <div id="progress-bar"><div id="progress-bar-fill"></div></div>
+            <span id="duration-time">0:00</span>
+        </div>
+
         <div class="controls">
             <button id="prevBtn">⏮️</button>
-            <button id="playPauseBtn">▶️ / ⏸️</button>
+            <button id="playPauseBtn">▶️</button>
             <button id="nextBtn">⏭️</button>
         </div>
-        <p>Управление для пользователя: <span id="tg_user_id">...</span></p>
+        
+        <div id="search-section">
+            <h3>Поиск и запуск</h3>
+            <input type="text" id="search-query" placeholder="Название трека или исполнителя...">
+            <button id="searchBtn">Найти и Play</button>
+            <div id="search-result"></div>
+        </div>
+
+        <p style="margin-top: 30px; font-size: 0.8em; color: #535353;">
+            ID пользователя: <span id="tg_user_id">...</span>
+        </p>
     </div>
 
     <script>
@@ -54,54 +156,156 @@
         tg.ready();
         
         let user_id = null;
+        let isPlaying = false;
+        let currentProgressInterval = null;
+
+        // Вспомогательная функция для форматирования времени (ms -> mm:ss)
+        function formatTime(ms) {
+            const totalSeconds = Math.floor(ms / 1000);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
         
-        // --- 1. Извлечение User ID из данных Web App ---
+        // --- 1. Инициализация и получение User ID ---
         if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
             user_id = tg.initDataUnsafe.user.id.toString();
             document.getElementById('tg_user_id').textContent = user_id;
         } else {
-             document.getElementById('tg_user_id').textContent = 'ID не найден. Авторизуйтесь.';
-             document.getElementById('status').textContent = 'Ошибка: ID пользователя не найден.';
+             document.getElementById('tg_user_id').textContent = 'ID не найден.';
+             alert('Ошибка: ID пользователя не найден. Авторизуйтесь через Telegram.');
         }
 
-        // --- 2. Функция для отправки команд на бэкенд Flask ---
+        // --- 2. Функция для отправки команд управления (Play/Next/Prev) ---
         function sendControlCommand(action) {
-            if (!user_id) {
-                alert('Сначала нужно авторизоваться!');
-                return;
-            }
+            if (!user_id) return;
+            
+            const actionRoute = (action === 'playpause') ? 'playpause' : (action === 'next' ? 'next' : 'prev');
 
-            document.getElementById('status').textContent = `Отправка команды: ${action}`;
-
-            fetch(`/api/control/${action}`, {
+            fetch(`/api/control/${actionRoute}`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ user_id: user_id })
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    document.getElementById('status').textContent = `✅ Успешно: ${data.message}`;
+                    setTimeout(updatePlayerStatus, 500); // Даем Spotify время отреагировать
                 } else {
-                    document.getElementById('status').textContent = `❌ Ошибка: ${data.message}`;
+                    alert(`Ошибка: ${data.message}`);
                 }
             })
             .catch(error => {
-                console.error('Fetch error:', error);
-                document.getElementById('status').textContent = 'Сетевая ошибка или ошибка сервера.';
+                alert('Сетевая ошибка или ошибка сервера.');
+            });
+        }
+        
+        // --- 3. Функция для обновления статуса плеера ---
+        function updatePlayerStatus() {
+            if (!user_id) return;
+
+            fetch(`/api/status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user_id })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.success) {
+                    document.getElementById('track-name').textContent = 'Ошибка загрузки статуса.';
+                    document.getElementById('artist-name').textContent = data.message;
+                    clearInterval(currentProgressInterval);
+                    return;
+                }
+
+                if (!data.track_name) {
+                    document.getElementById('track-name').textContent = 'Нет активного устройства или трека.';
+                    document.getElementById('artist-name').textContent = 'Запустите Spotify на любом устройстве.';
+                    document.getElementById('album-art').src = '';
+                    document.getElementById('playPauseBtn').textContent = '▶️';
+                    clearInterval(currentProgressInterval);
+                    return;
+                }
+
+                // Обновление информации о треке
+                document.getElementById('track-name').textContent = data.track_name;
+                document.getElementById('artist-name').textContent = data.artist_name;
+                document.getElementById('album-art').src = data.image_url || '';
+                
+                // Обновление кнопки Play/Pause
+                isPlaying = data.is_playing;
+                document.getElementById('playPauseBtn').textContent = isPlaying ? '⏸️' : '▶️';
+                
+                // Обновление прогресс-бара
+                const duration = data.duration_ms;
+                const progress = data.progress_ms;
+
+                document.getElementById('duration-time').textContent = formatTime(duration);
+                document.getElementById('progress-time').textContent = formatTime(progress);
+                
+                const percentage = (progress / duration) * 100;
+                document.getElementById('progress-bar-fill').style.width = `${percentage}%`;
+
+                // Перезапускаем интервал обновления прогресса, если нужно
+                clearInterval(currentProgressInterval);
+                if (isPlaying) {
+                     let currentMs = progress;
+                     currentProgressInterval = setInterval(() => {
+                        currentMs += 1000;
+                        document.getElementById('progress-time').textContent = formatTime(currentMs);
+                        const currentPercentage = (currentMs / duration) * 100;
+                        document.getElementById('progress-bar-fill').style.width = `${currentPercentage}%`;
+                        if (currentMs >= duration) {
+                            clearInterval(currentProgressInterval);
+                            setTimeout(updatePlayerStatus, 500); // Обновляем статус после окончания трека
+                        }
+                    }, 1000);
+                }
+            })
+            .catch(error => {
+                 document.getElementById('track-name').textContent = 'Сетевая ошибка.';
+                 clearInterval(currentProgressInterval);
+            });
+        }
+        
+        // --- 4. Функция поиска и запуска трека ---
+        function searchAndPlay() {
+            if (!user_id) return;
+            const query = document.getElementById('search-query').value.trim();
+            if (!query) return;
+
+            document.getElementById('search-result').textContent = `Ищу трек: "${query}"...`;
+
+            fetch(`/api/search_play`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: user_id, query: query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('search-result').textContent = data.message;
+                if (data.success) {
+                    document.getElementById('search-query').value = '';
+                    setTimeout(updatePlayerStatus, 1000); // Даем Spotify время запуститься
+                }
+            })
+            .catch(error => {
+                document.getElementById('search-result').textContent = 'Ошибка при поиске и запуске.';
             });
         }
 
-        // --- 3. Назначение обработчиков на кнопки ---
+        // --- 5. Назначение обработчиков и запуск обновления ---
         document.getElementById('playPauseBtn').onclick = () => sendControlCommand('playpause');
         document.getElementById('nextBtn').onclick = () => sendControlCommand('next');
         document.getElementById('prevBtn').onclick = () => sendControlCommand('prev');
-        
-        // Установка кнопки закрытия в Mini App
+        document.getElementById('searchBtn').onclick = searchAndPlay;
+
+        // Запускаем обновление статуса сразу и затем каждые 5 секунд
+        updatePlayerStatus();
+        setInterval(updatePlayerStatus, 5000); 
+
+        // Настраиваем кнопку закрытия в Mini App
         tg.MainButton.setText("Закрыть Mini App").onClick(() => tg.close()).show();
-        document.getElementById('status').textContent = 'Готов к управлению Spotify.';
     </script>
 </body>
 </html>
