@@ -7,26 +7,21 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 # --- 1. КОНФИГУРАЦИЯ И ПРОВЕРКА ПЕРЕМЕННЫХ ---
 
-# Получение переменных окружения (должны быть заданы на Render!)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 WEBHOOK_BASE_URL = os.environ.get('WEBHOOK_BASE_URL') 
 
-# Обязательная проверка наличия всех ключей
 if not all([TELEGRAM_TOKEN, SPOTIPY_CLIENT_ID, SPOTIPY_CLIENT_SECRET, WEBHOOK_BASE_URL]):
     print("FATAL ERROR: Один или несколько ключей окружения отсутствуют!")
     raise EnvironmentError("Необходимо установить все переменные окружения на Render.")
 
 WEBHOOK_PATH = f'/{TELEGRAM_TOKEN}' 
 SPOTIPY_REDIRECT_URI = f'{WEBHOOK_BASE_URL}/callback'
-SCOPE = "user-read-playback-state user-modify-playback-state playlist-read-private" 
+SCOPE = "user-read-playback-state user-modify-playback-state playlist-read-private user-library-read" # Добавили user-library-read
 
-# Инициализация бота и Flask
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
-
-# Хранилище токенов (ВНИМАНИЕ: Сбрасывается при перезапуске сервера!)
 USER_TOKENS = {}
 
 # --- 2. ФУНКЦИИ SPOTIFY ---
@@ -46,13 +41,17 @@ def get_spotify_client(user_id):
     if user_id not in USER_TOKENS:
         return None
     
-    token_info = USER_TOKENS[user_id]
+    token_info = USER_TOKENS.get(user_id)
     
-    # Проверка и обновление токена
     if SpotifyOAuth.is_token_expired(token_info):
-        sp_oauth = get_spotify_oauth(user_id)
-        token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
-        USER_TOKENS[user_id] = token_info
+        try:
+            sp_oauth = get_spotify_oauth(user_id)
+            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+            USER_TOKENS[user_id] = token_info
+        except Exception as e:
+            # Если не удалось обновить токен, пользователь должен авторизоваться снова
+            print(f"Token refresh failed for {user_id}: {e}")
+            return None
         
     return Spotify(auth=token_info['access_token'])
 
@@ -72,10 +71,7 @@ def send_auth_link(message):
 
     markup = InlineKeyboardMarkup()
     
-    # 1. Кнопка для OAuth (Авторизация Spotify)
     oauth_button = InlineKeyboardButton("🔑 Авторизоваться в Spotify (ШАГ 1)", url=auth_url)
-    
-    # 2. Кнопка для Mini App (Web App Button)
     webapp_url = WebAppInfo(url=WEBHOOK_BASE_URL) 
     webapp_button = InlineKeyboardButton("✨ Запустить Mini App (ШАГ 2)", web_app=webapp_url)
 
@@ -90,7 +86,6 @@ def send_auth_link(message):
 @bot.message_handler(commands=['play'])
 def control_playback(message):
     user_id = str(message.chat.id)
-    # Эта функция только проверяет авторизацию
     sp_client = get_spotify_client(user_id)
     
     if not sp_client:
@@ -137,13 +132,46 @@ def index():
     """Корневой маршрут, который отдает HTML-страницу Mini App."""
     return render_template('index.html')
 
-# --- API для управления из Mini App ---
+# --- API для получения статуса плеера ---
+@app.route("/api/status", methods=['POST'])
+def api_status():
+    """Возвращает текущий статус воспроизведения Spotify."""
+    data = request.get_json()
+    user_id = data.get('user_id')
+
+    if not user_id:
+        return jsonify({"success": False, "message": "User ID is missing"}), 400
+
+    sp_client = get_spotify_client(user_id)
+    if not sp_client:
+        return jsonify({"success": False, "message": "User not authorized"}), 401
+
+    try:
+        playback = sp_client.current_playback()
+        if not playback:
+            return jsonify({"success": True, "is_playing": False, "message": "No active device"}), 200
+
+        track = playback.get('item', {})
+        
+        status_data = {
+            "success": True,
+            "is_playing": playback.get('is_playing', False),
+            "track_name": track.get('name', 'Неизвестный трек'),
+            "artist_name": ', '.join([artist['name'] for artist in track.get('artists', [])]),
+            "progress_ms": playback.get('progress_ms', 0),
+            "duration_ms": track.get('duration_ms', 1),
+            "image_url": track.get('album', {}).get('images', [{}])[0].get('url') if track.get('album') else None
+        }
+        return jsonify(status_data), 200
+
+    except Exception as e:
+        print(f"Spotify Status Error: {e}")
+        return jsonify({"success": False, "message": "Spotify API error."}), 500
+
+# --- API для управления (Play/Next/Prev) ---
 @app.route("/api/control/<action>", methods=['POST'])
 def api_control(action):
     """Маршрут для приема команд от JavaScript из Mini App."""
-    # 1. Извлечение user_id из данных WebApp
-    # В реальном приложении это требует более сложной аутентификации,
-    # но для простоты берем его из тела запроса.
     data = request.get_json()
     user_id = data.get('user_id')
 
@@ -177,6 +205,41 @@ def api_control(action):
     except Exception as e:
         print(f"Spotify Control Error: {e}")
         return jsonify({"success": False, "message": "Spotify API error. Check device."}), 500
+
+# --- API для поиска и запуска треков ---
+@app.route("/api/search_play", methods=['POST'])
+def api_search_play():
+    """Ищет трек по запросу и запускает его."""
+    data = request.get_json()
+    user_id = data.get('user_id')
+    query = data.get('query')
+
+    if not user_id or not query:
+        return jsonify({"success": False, "message": "Missing user ID or query"}), 400
+
+    sp_client = get_spotify_client(user_id)
+    if not sp_client:
+        return jsonify({"success": False, "message": "User not authorized"}), 401
+
+    try:
+        # 1. Поиск трека
+        results = sp_client.search(q=query, limit=1, type='track')
+        tracks = results['tracks']['items']
+
+        if not tracks:
+            return jsonify({"success": False, "message": f"Трек '{query}' не найден."}), 200
+
+        track_uri = tracks[0]['uri']
+
+        # 2. Запуск воспроизведения
+        sp_client.start_playback(uris=[track_uri])
+
+        msg = f"Запущен трек: {tracks[0]['name']} - {tracks[0]['artists'][0]['name']}"
+        return jsonify({"success": True, "message": msg}), 200
+
+    except Exception as e:
+        print(f"Spotify Search/Play Error: {e}")
+        return jsonify({"success": False, "message": "Spotify API error during search/play."}), 500
 
 # --- 5. ЗАПУСК (Через Gunicorn) ---
 
